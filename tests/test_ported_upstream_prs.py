@@ -89,3 +89,45 @@ async def test_pr32_initiators_clear_when_the_pump_stops(hass, network):
     )
     _update(fan)
     assert fan.extra_state_attributes["initiators"] == []
+
+
+async def _climate(hass, network, temperature_state):
+    from custom_components.gecko.climate import GeckoClimate
+
+    coordinator, entry = await _setup(
+        hass, network, build_zones({"temperatureControl": {"1": {"temperature_": 38, "setPoint": 38, "status_": 0}}})
+    )
+    climate = GeckoClimate(coordinator, _zone(coordinator, ZoneType.TEMPERATURE_CONTROL_ZONE, "1"))
+    await _reconnect(
+        hass, network, coordinator,
+        build_zones({"temperatureControl": {"1": {"temperature_": 38, "setPoint": 38, **temperature_state}}}),
+    )
+    _update(climate)
+    return climate
+
+
+async def test_pr60_cooling_and_defrost_are_not_idle(hass, network):
+    """geckoal/ha-gecko-integration#60: every status maps to its HVAC action."""
+    cooling = await _climate(hass, network, {"status_": 2})
+    assert cooling.hvac_action == "cooling"
+    assert cooling.extra_state_attributes["heat_source"] == "none"
+
+
+async def test_pr60_heat_pump_defrost(hass, network):
+    climate = await _climate(hass, network, {"status_": 7})
+    assert climate.hvac_action == "defrosting"
+    assert climate.extra_state_attributes["heat_source"] == "heat_pump"
+
+
+async def test_pr60_heat_pump_error_is_surfaced(hass, network):
+    climate = await _climate(hass, network, {"status_": 8})
+    assert climate.hvac_action == "idle"
+    assert climate.extra_state_attributes["heat_pump_error"] is True
+
+
+async def test_pr60_electric_heating(hass, network):
+    climate = await _climate(hass, network, {"status_": 1})
+    assert climate.hvac_action == "heating"
+    assert climate.extra_state_attributes["heat_source"] == "electric"
+    assert climate.extra_state_attributes["heat_pump_error"] is False
+
