@@ -171,6 +171,7 @@ async def test_light_follows_the_new_client(hass, network):
     record_publishes(new_zones, published)
     coordinator, entry = await _setup(hass, network, old_zones)
     light = GeckoLight(coordinator, entry, _zone(coordinator, ZoneType.LIGHTING_ZONE, "1"))
+    light.hass = hass  # set by HA when the entity is added; #57's turn_off runs in the executor
     await _drop_and_reconnect(hass, network, coordinator, new_zones)
 
     _coordinator_update(light)

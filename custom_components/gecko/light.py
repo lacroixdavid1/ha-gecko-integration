@@ -216,12 +216,23 @@ class GeckoLight(GeckoEntityAvailabilityMixin, CoordinatorEntity, LightEntity):
         self._update_state()
 
     def _zone_supports_color(self) -> bool:
-        """Return True if this zone exposes an rgbi attribute at all."""
-        return hasattr(self._zone, "rgbi")
+        """Return True if this zone reports a colour.
+
+        Every LightingZone has an rgbi attribute; it is None when the light
+        reports no colour, so hasattr() alone offered RGB to on/off lights.
+        """
+        return getattr(self._zone, "rgbi", None) is not None
 
     def _zone_supports_effect(self) -> bool:
-        """Return True if this zone exposes an effect attribute at all."""
-        return hasattr(self._zone, "effect")
+        """Return True if this zone reports an effect or a colour.
+
+        Like rgbi, the effect attribute exists on every LightingZone (None
+        when unused); an on/off light must not advertise effects.
+        """
+        return (
+            getattr(self._zone, "effect", None) is not None
+            or self._zone_supports_color()
+        )
 
     def _get_zone_state(self) -> Any | None:
         """Get the current zone state from coordinator."""

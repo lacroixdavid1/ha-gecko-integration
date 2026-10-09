@@ -138,3 +138,35 @@ async def test_pr56_eco_mode_from_the_current_client(hass, network):
     climate = await _climate(hass, network, {"status_": 0, "mode_": {"eco": True}})
     assert climate.extra_state_attributes["eco_mode"] is True
     assert set(climate.extra_state_attributes) == {"heat_source", "heat_pump_error", "eco_mode"}
+
+
+async def _light(hass, network, light_state):
+    from custom_components.gecko.light import GeckoLight
+
+    coordinator, entry = await _setup(hass, network, build_zones({"lighting": {"1": light_state}}))
+    return coordinator, GeckoLight(coordinator, entry, _zone(coordinator, ZoneType.LIGHTING_ZONE, "1"))
+
+
+async def test_pr57_on_off_light_stays_on_off(hass, network):
+    """geckoal/ha-gecko-integration#57 offered colour to every light: every
+    LightingZone has an rgbi attribute, None when the light reports no colour.
+    A light that reports no colour must stay ON/OFF, with no effects."""
+    from homeassistant.components.light import ColorMode, LightEntityFeature
+
+    _, light = await _light(hass, network, {"active": False})
+    assert light.supported_color_modes == {ColorMode.ONOFF}
+    assert not light.supported_features & LightEntityFeature.EFFECT
+
+
+async def test_pr57_colour_light_offers_rgb(hass, network):
+    from homeassistant.components.light import ColorMode
+
+    _, light = await _light(hass, network, {"active": True, "rgbi": [255, 0, 0, 100]})
+    assert light.supported_color_modes == {ColorMode.RGB}
+
+
+async def test_pr57_colour_follows_the_current_client(hass, network):
+    coordinator, light = await _light(hass, network, {"active": True, "rgbi": [255, 0, 0, 100]})
+    await _reconnect(hass, network, coordinator, build_zones({"lighting": {"1": {"active": True, "rgbi": [0, 0, 255, 100]}}}))
+    _update(light)
+    assert light.rgb_color is not None and light.rgb_color[2] > light.rgb_color[0]
