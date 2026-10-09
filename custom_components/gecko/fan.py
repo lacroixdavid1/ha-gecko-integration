@@ -122,6 +122,13 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
             return
         self._attr_is_on = zone.active
         self._attr_percentage = int(zone.speed) if zone.speed is not None else 0
+
+        # geckoal/ha-gecko-integration#32: why the pump runs (UD user demand,
+        # FI filtration, HT heating, PU purge, CF check-flow, ...). Rebuilt on
+        # every update so a stopped pump clears its list.
+        self._attr_extra_state_attributes = {
+            "initiators": [getattr(i, "value", i) for i in (zone.initiators or [])],
+        }
         
         if isinstance(zone.speed, (int, float)):
             if zone.speed < 34:
