@@ -151,6 +151,9 @@ class GeckoClimate(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, Coordinat
         self._attr_extra_state_attributes = {
             "heat_source": _HEAT_SOURCE_BY_STATUS.get(status, "none"),
             "heat_pump_error": status == TemperatureControlZoneStatus.HEAT_PUMP_ERROR,
+            # geckoal/ha-gecko-integration#56: read-only, the library has no
+            # setter for eco mode, so it is not offered as a preset.
+            "eco_mode": zone.mode.eco if zone.mode else None,
         }
         
         self._attr_current_temperature = zone.temperature

@@ -131,3 +131,10 @@ async def test_pr60_electric_heating(hass, network):
     assert climate.extra_state_attributes["heat_source"] == "electric"
     assert climate.extra_state_attributes["heat_pump_error"] is False
 
+
+
+async def test_pr56_eco_mode_from_the_current_client(hass, network):
+    """geckoal/ha-gecko-integration#56: eco mode, next to #60's attributes."""
+    climate = await _climate(hass, network, {"status_": 0, "mode_": {"eco": True}})
+    assert climate.extra_state_attributes["eco_mode"] is True
+    assert set(climate.extra_state_attributes) == {"heat_source", "heat_pump_error", "eco_mode"}
