@@ -19,6 +19,7 @@ from gecko_iot_client.transporters.mqtt import MqttTransporter
 
 from .aws_compat import ensure_aws_crt_compatible
 from .const import DOMAIN, CONFIG_TIMEOUT
+from .flow_speed import restore_flow_speed_ranges
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +84,12 @@ class GeckoConnectionManager:
             if connection.gecko_client is not gecko_client:
                 _LOGGER.debug("Ignoring zone update from a replaced client for monitor %s", monitor_id)
                 return
+            # gecko-iot-client flattens each pump's speed range; put it back
+            # before any entity reads the zones. Never let it block an update.
+            try:
+                restore_flow_speed_ranges(gecko_client, updated_zones)
+            except Exception:
+                _LOGGER.exception("Could not restore pump speed ranges for monitor %s", monitor_id)
             # Copy callbacks list to avoid race conditions during iteration
             callbacks = list(connection.update_callbacks)
             for callback in callbacks:
