@@ -32,14 +32,16 @@ ZONES_CONFIG: dict[str, Any] = {
 }
 
 
-def build_zones(reported: dict[str, Any] | None = None):
+def build_zones(reported: dict[str, Any] | None = None, config: dict[str, Any] | None = None):
     """Build zones the way GeckoIotClient does: parse the configuration, apply state.
 
     Every call returns NEW zone objects, as a new GeckoIotClient does after a
-    reconnect.
+    reconnect. `config` defaults to ZONES_CONFIG.
     """
     parser = ZoneConfigurationParser()
-    zones = parser.parse_zones_configuration(copy.deepcopy(ZONES_CONFIG))
+    zones = parser.parse_zones_configuration(
+        copy.deepcopy(config if config is not None else ZONES_CONFIG)
+    )
     if reported:
         parser.apply_state_to_zones(
             zones, {"state": {"reported": {"zones": copy.deepcopy(reported)}}}
@@ -76,6 +78,8 @@ class FakeGeckoClient:
         self.connected = False
         self.connect_calls = 0
         self.disconnect_calls = 0
+        # The raw configuration, as the real client keeps it.
+        self._configuration = None
         # Zones this client emits during connect(), like a real client does
         # once its configuration and state are loaded.
         self.zones_on_connect = None
@@ -132,10 +136,14 @@ class FakeNetwork:
         self.clients: list[FakeGeckoClient] = []
         # Zones the NEXT client created will emit during connect(); None = nothing.
         self.next_zones_on_connect = None
+        # Raw configuration every new client carries (a spa's configuration
+        # survives a reconnect).
+        self.configuration = None
 
     def make_client(self, monitor_id, transporter, config_timeout=None) -> FakeGeckoClient:
         client = FakeGeckoClient(monitor_id, transporter, config_timeout)
         client.zones_on_connect = self.next_zones_on_connect
+        client._configuration = copy.deepcopy(self.configuration)
         self.next_zones_on_connect = None
         self.clients.append(client)
         return client
