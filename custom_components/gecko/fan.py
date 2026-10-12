@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -29,6 +31,10 @@ _LOGGER = logging.getLogger(__name__)
 # Sent by turn_on to a zone whose speed range is unknown: the value this
 # integration always sent, which an in.touch 3 runs at its low speed.
 LEGACY_SPEED = 1
+
+# How long a pump started low on its way to high gets to report that it runs
+# (see _start_low_first). Under the 45 s the wall and the brassage wait.
+START_TIMEOUT = 15
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -170,6 +176,8 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
         speeds = preset_speeds(zone)
         if speeds:
             speed = speeds[0] if percentage is None else percentage_to_ordered_list_item(speeds, percentage)
+            if not zone.active and speed != speeds[0] and zone.speed == speed:
+                zone = await self._start_low_first(zone, speeds[0])
         elif zone.speed_config:
             # One speed: the range's own value; the restored range rejects anything else.
             speed = zone.speed_config["maximum"]
@@ -189,6 +197,45 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
             _LOGGER.warning("Could not find pump zone %s", self._zone.id)
             return
         zone.deactivate()
+
+    async def _start_low_first(self, zone: FlowZone, low: int) -> FlowZone:
+        """Start a pump low, and return once the spa reports it running.
+
+        The spa acts on its shadow delta, desired against reported. A pump that
+        stopped at high still reports that speed, so "on at high" leaves only
+        `active` in the delta, and an in.touch 3 ignores a start that carries
+        no speed (measured 2026-10-12, twice). A low start always carries one
+        (low never reads back as the value sent); the high command then finds
+        the spa reporting low, so it carries one too. Publishing both at once
+        fails: the spa started low, then stopped by itself.
+        """
+        started = asyncio.Event()
+
+        @callback
+        def _reported_running() -> None:
+            current = self._current_zone()
+            # set_speed() writes active and speed into the zone before the spa
+            # answers, and a coordinator poll can read that write. The spa
+            # never reports the low value it was sent (it reads back 99), so
+            # running at any other speed is the spa's own report.
+            if current is not None and current.active and current.speed != low:
+                started.set()
+
+        remove = self.coordinator.async_add_listener(_reported_running)
+        try:
+            _LOGGER.debug("Starting pump %s low before high", self._attr_name)
+            zone.set_speed(low)
+            try:
+                async with asyncio.timeout(START_TIMEOUT):
+                    await started.wait()
+            except TimeoutError as err:
+                raise HomeAssistantError(
+                    f"{self._attr_name} did not report running within {START_TIMEOUT} s"
+                    " (it may still start at low speed)"
+                ) from err
+        finally:
+            remove()
+        return self._current_zone() or zone
 
     async def _zone_to_command(self) -> FlowZone | None:
         """The zone on the current client, or None (logged) when it cannot be commanded."""

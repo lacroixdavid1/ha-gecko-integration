@@ -8,6 +8,7 @@ hold the integration to it.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -16,6 +17,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.fan import FanEntityFeature
+from homeassistant.exceptions import HomeAssistantError
 
 from gecko_iot_client import GeckoIotClient
 from gecko_iot_client.models.zone_parser import ZoneConfigurationParser
@@ -23,6 +25,7 @@ from gecko_iot_client.models.zone_types import ZoneType
 
 from custom_components.gecko.const import DOMAIN
 from custom_components.gecko.coordinator import GeckoVesselCoordinator
+from custom_components.gecko import fan as fan_module
 from custom_components.gecko.fan import GeckoFan
 from custom_components.gecko.flow_speed import preset_for_reported, restore_flow_speed_ranges
 
@@ -231,3 +234,70 @@ async def test_speeds_survive_a_reconnect(hass, network):
     await fan.async_set_percentage(50)
     assert sink[-1][3] == {"speed": 50, "active": True}
     assert sink[-1][0] is _zone(coordinator, "1"), "the command went to a replaced zone"
+
+
+# The spa acts on its shadow delta (desired against reported), and ignores a
+# pump-1 start whose delta carries no speed. A pump that stopped at high still
+# reports 100, so "on at 100" leaves only `active` in the delta: nothing
+# happens (2026-10-12 17:04:36 and 17:05:35). Starting low, then going high
+# once the spa reports the pump running, works.
+
+
+async def _yield(times: int = 5) -> None:
+    for _ in range(times):
+        await asyncio.sleep(0)
+
+
+async def test_high_from_off_parked_at_high_starts_low_then_waits_for_the_spa(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "1")
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+
+    task = asyncio.ensure_future(fan.async_set_percentage(100))
+    await _yield()
+    assert [p[3] for p in sink] == [{"speed": 50, "active": True}], "start low first"
+
+    # A coordinator poll before the echo sees set_speed's optimistic write.
+    coordinator.async_update_listeners()
+    await _yield()
+    # The echo of our own publish: reported is still off at 100.
+    _report(coordinator, {"1": {"active": False, "speed": 100}})
+    coordinator.async_update_listeners()
+    await _yield()
+    assert len(sink) == 1, "high went out before the spa reported the pump running"
+
+    # The spa's own report: running, low.
+    _report(coordinator, {"1": {"active": True, "speed": 99}})
+    coordinator.async_update_listeners()
+    await asyncio.wait_for(task, 1)
+    assert [p[3] for p in sink] == [{"speed": 50, "active": True}, {"speed": 100, "active": True}]
+
+
+async def test_high_from_off_parked_at_low_is_one_publish(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 99}}})
+    fan = _pump(coordinator, entry, "1")
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    await asyncio.wait_for(fan.async_set_percentage(100), 1)
+    assert [p[3] for p in sink] == [{"speed": 100, "active": True}]
+
+
+async def test_low_from_off_parked_at_high_is_one_publish(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "1")
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    await asyncio.wait_for(fan.async_set_percentage(50), 1)
+    assert [p[3] for p in sink] == [{"speed": 50, "active": True}]
+
+
+async def test_high_start_that_never_runs_is_refused(hass, network, monkeypatch):
+    monkeypatch.setattr(fan_module, "START_TIMEOUT", 0.05)
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "1")
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    with pytest.raises(HomeAssistantError):
+        await asyncio.wait_for(fan.async_set_percentage(100), 1)
+    assert [p[3] for p in sink] == [{"speed": 50, "active": True}], "no high command without a report"
