@@ -141,3 +141,93 @@ def test_preset_for_reported_on_a_two_speed_pump(reported, preset):
 
 def test_preset_for_reported_without_presets():
     assert preset_for_reported([], 100) is None
+
+
+async def test_pump_1_offers_two_speeds(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "1")
+    assert fan.supported_features & FanEntityFeature.SET_SPEED
+    assert fan.speed_count == 2
+    assert fan.percentage_step == 50
+
+
+async def test_pump_2_stays_on_off(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"2": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "2")
+    assert fan.supported_features == ON_OFF
+
+
+@pytest.mark.parametrize(
+    ("flow", "percentage"),
+    [
+        ({"active": True, "speed": 99}, 50),  # low, as the spa reports it
+        ({"active": True, "speed": 100}, 100),
+        ({"active": True, "speed": 50}, 50),
+        ({"active": False, "speed": 100}, 0),
+    ],
+)
+async def test_pump_1_reads_the_spa_readback(hass, network, flow, percentage):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "1")
+    _report(coordinator, {"1": flow})
+    _refresh(fan)
+    assert fan.percentage == percentage
+    assert fan.is_on is flow["active"]
+
+
+@pytest.mark.parametrize(
+    ("call", "published"),
+    [
+        (lambda fan: fan.async_set_percentage(100), {"speed": 100, "active": True}),
+        (lambda fan: fan.async_set_percentage(50), {"speed": 50, "active": True}),
+        (lambda fan: fan.async_set_percentage(30), {"speed": 50, "active": True}),
+        (lambda fan: fan.async_turn_on(percentage=75), {"speed": 100, "active": True}),
+        (lambda fan: fan.async_turn_on(), {"speed": 50, "active": True}),
+        (lambda fan: fan.async_set_percentage(0), {"active": False}),
+    ],
+)
+async def test_pump_1_commands(hass, network, call, published):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": True, "speed": 99}}})
+    fan = _pump(coordinator, entry, "1")
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    await call(fan)
+    assert sink and sink[-1][3] == published
+
+
+async def test_pump_2_turn_on_sends_its_maximum(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"2": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "2")
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    await fan.async_turn_on()
+    assert sink[-1][3] == {"speed": 100, "active": True}
+
+
+async def test_without_a_configuration_pumps_stay_as_before(hass, network):
+    """No raw configuration (a library change): on/off, and turn-on sends the old 1."""
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False}}}, configuration=None)
+    fan = _pump(coordinator, entry, "1")
+    assert fan.supported_features == ON_OFF
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    await fan.async_turn_on()
+    assert sink[-1][3] == {"speed": 1, "active": True}
+
+
+async def test_speeds_survive_a_reconnect(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 100}}})
+    fan = _pump(coordinator, entry, "1")
+    network.clients[-1].emit_connectivity(False)
+    network.next_zones_on_connect = spa_zones({"flow": {"1": {"active": True, "speed": 100}}})
+    await coordinator._simple_reconnect()
+    await hass.async_block_till_done()
+    assert len(network.clients) == 2, "the reconnect did not build a new client"
+    _refresh(fan)
+    assert fan.supported_features & FanEntityFeature.SET_SPEED
+    assert fan.percentage == 100
+    sink: list = []
+    record_publishes(coordinator.get_all_zones(), sink)
+    await fan.async_set_percentage(50)
+    assert sink[-1][3] == {"speed": 50, "active": True}
+    assert sink[-1][0] is _zone(coordinator, "1"), "the command went to a replaced zone"
