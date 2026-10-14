@@ -301,3 +301,23 @@ async def test_high_start_that_never_runs_is_refused(hass, network, monkeypatch)
     with pytest.raises(HomeAssistantError):
         await asyncio.wait_for(fan.async_set_percentage(100), 1)
     assert [p[3] for p in sink] == [{"speed": 50, "active": True}], "no high command without a report"
+
+
+# A command that cannot go out must fail the service call, so the wall shows
+# its refusal at once instead of waiting 45 s for a state that never comes.
+
+
+async def test_turn_on_without_a_client_is_refused(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": False, "speed": 99}}})
+    fan = _pump(coordinator, entry, "1")
+    with patch.object(coordinator, "get_gecko_client", return_value=None):
+        with pytest.raises(HomeAssistantError):
+            await fan.async_set_percentage(100)
+
+
+async def test_turn_off_of_a_missing_zone_is_refused(hass, network):
+    coordinator, entry = await _setup(hass, network, {"flow": {"1": {"active": True, "speed": 99}}})
+    fan = _pump(coordinator, entry, "1")
+    with patch.object(fan, "_current_zone", return_value=None):
+        with pytest.raises(HomeAssistantError):
+            await fan.async_turn_off()

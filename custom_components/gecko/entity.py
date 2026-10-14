@@ -139,7 +139,7 @@ class GeckoZoneEntityMixin:
     zone objects. The zone object an entity was created with then belongs to
     a client that is no longer connected: reading it freezes the entity at
     its last state, and commanding it publishes through a dead transport.
-    GeckoLight and GeckoFan.async_set_speed already looked their zone up on
+    GeckoLight and GeckoFan's speed command already looked their zone up on
     every call; this gives the other zone entities the same rule.
     """
 

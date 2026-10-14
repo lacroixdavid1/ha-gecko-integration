@@ -12,10 +12,13 @@ _validate_speed then work as written.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from gecko_iot_client.models.flow_zone import FlowZoneCapabilities
 from gecko_iot_client.models.zone_types import ZoneType
+
+_LOGGER = logging.getLogger(__name__)
 
 _RANGE_KEYS = ("minimum", "maximum", "stepIncrement")
 
@@ -50,6 +53,10 @@ def restore_flow_speed_ranges(gecko_client: Any, zones: Any) -> None:
         config = getattr(zone, "config", None)
         if speed is not None and isinstance(config, dict):
             config["speed"] = speed
+        else:
+            # The pump stays on/off. Findable in the log, not only as
+            # supported_features 48 on the entity.
+            _LOGGER.debug("No speed range for flow zone %s in the configuration", zone.id)
 
 
 def preset_speeds(zone: Any) -> list[int]:
