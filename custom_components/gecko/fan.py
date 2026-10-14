@@ -171,8 +171,6 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
             await self.async_turn_off()
             return
         zone = await self._zone_to_command()
-        if zone is None:
-            return
         speeds = preset_speeds(zone)
         if speeds:
             speed = speeds[0] if percentage is None else percentage_to_ordered_list_item(speeds, percentage)
@@ -194,8 +192,7 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
         """Turn the pump off. The spa refuses while it filters or heats (RuntimeError)."""
         zone = self._current_zone()
         if zone is None:
-            _LOGGER.warning("Could not find pump zone %s", self._zone.id)
-            return
+            raise HomeAssistantError(f"{self._attr_name}: pump zone {self._zone.id} not found")
         zone.deactivate()
 
     async def _start_low_first(self, zone: FlowZone, low: int) -> FlowZone:
@@ -219,6 +216,9 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
             # never reports the low value it was sent (it reads back 99), so
             # running at any other speed is the spa's own report.
             if current is not None and current.active and current.speed != low:
+                # The speed the spa reported with `active`: 99 so far. A 100
+                # here would mean the high command finds no delta to carry.
+                _LOGGER.debug("Pump %s reported running at speed %s", self._attr_name, current.speed)
                 started.set()
 
         remove = self.coordinator.async_add_listener(_reported_running)
@@ -237,14 +237,17 @@ class GeckoFan(GeckoZoneEntityMixin, GeckoEntityAvailabilityMixin, CoordinatorEn
             remove()
         return self._current_zone() or zone
 
-    async def _zone_to_command(self) -> FlowZone | None:
-        """The zone on the current client, or None (logged) when it cannot be commanded."""
+    async def _zone_to_command(self) -> FlowZone:
+        """The zone on the current client; refuse the command when there is none.
+
+        A silent return let the caller's service call succeed, and the wall
+        then waited 45 s for a state that never came before showing a refusal.
+        """
         if not await self._coordinator.get_gecko_client():
-            _LOGGER.error("No gecko client available for %s", self._attr_name)
-            return None
+            raise HomeAssistantError(f"{self._attr_name}: no Gecko client connected")
         zone = self._current_zone()
         if zone is None:
-            _LOGGER.warning("Could not find pump zone %s", self._zone.id)
+            raise HomeAssistantError(f"{self._attr_name}: pump zone {self._zone.id} not found")
         return zone
 
     @property
