@@ -16,12 +16,16 @@ from homeassistant.util.hass_dict import HassKey
 from gecko_iot_client.models.events import EventChannel
 from gecko_iot_client import GeckoIotClient
 from gecko_iot_client.transporters.mqtt import MqttTransporter
+from gecko_iot_client.transporters.mqtt import client as mqtt_client_module
 
+from . import mqtt_keepalive
 from .aws_compat import ensure_aws_crt_compatible
 from .const import DOMAIN, CONFIG_TIMEOUT
 from .flow_speed import restore_flow_speed_ranges
 
 _LOGGER = logging.getLogger(__name__)
+
+mqtt_keepalive.install(mqtt_client_module)
 
 # Constants
 TOKEN_REFRESH_DELAY = 1  # seconds to wait before getting new token
